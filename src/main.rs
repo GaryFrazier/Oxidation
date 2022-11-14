@@ -12,6 +12,9 @@ use std::mem::size_of;
 use std::ptr::copy_nonoverlapping as memcpy;
 use std::time::Instant;
 use std::fs::File;
+use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
+use std::io::BufReader;
 
 use thiserror::Error;
 use anyhow::{anyhow, Result};
@@ -28,7 +31,7 @@ use winit::window::{Window, WindowBuilder};
 use log::*;
 
 use nalgebra_glm as glm;
-use lazy_static::lazy_static;
+//use lazy_static::lazy_static;
 
 const VALIDATION_ENABLED: bool =
     cfg!(debug_assertions);
@@ -115,6 +118,7 @@ impl App {
         create_texture_image(&instance, &device, &mut data)?;
         create_texture_image_view(&device, &mut data)?;
         create_texture_sampler(&device, &mut data)?;
+        load_model(&mut data)?;
         create_vertex_buffer(&instance, &device, &mut data)?;
         create_index_buffer(&instance, &device, &mut data)?;
         create_uniform_buffers(&instance, &device, &mut data)?;
@@ -338,6 +342,8 @@ struct AppData {
     render_finished_semaphores: Vec<vk::Semaphore>,
     in_flight_fences: Vec<vk::Fence>,
     images_in_flight: Vec<vk::Fence>,
+    vertices: Vec<Vertex>,
+    indices: Vec<u32>,
     vertex_buffer: vk::Buffer,
     vertex_buffer_memory: vk::DeviceMemory,
     index_buffer: vk::Buffer,
@@ -1020,7 +1026,7 @@ unsafe fn create_command_buffers(device: &Device, data: &mut AppData) -> Result<
             *command_buffer, vk::PipelineBindPoint::GRAPHICS, data.pipeline);
 
         device.cmd_bind_vertex_buffers(*command_buffer, 0, &[data.vertex_buffer], &[0]);
-        device.cmd_bind_index_buffer(*command_buffer, data.index_buffer, 0, vk::IndexType::UINT16);
+        device.cmd_bind_index_buffer(*command_buffer, data.index_buffer, 0, vk::IndexType::UINT32);
             
         device.cmd_bind_descriptor_sets(
             *command_buffer,
@@ -1031,7 +1037,7 @@ unsafe fn create_command_buffers(device: &Device, data: &mut AppData) -> Result<
             &[],
         );
 
-        device.cmd_draw_indexed(*command_buffer, INDICES.len() as u32, 1, 0, 0, 0);
+        device.cmd_draw_indexed(*command_buffer, data.indices.len() as u32, 1, 0, 0, 0);
 
         device.cmd_end_render_pass(*command_buffer);
         device.end_command_buffer(*command_buffer)?;
@@ -1064,6 +1070,7 @@ unsafe fn create_sync_objects(device: &Device, data: &mut AppData) -> Result<()>
 
 // verts 
 
+/*
 lazy_static! {
     static ref VERTICES: Vec<Vertex> = vec![
         Vertex::new(glm::vec3(-0.5, -0.5, 0.0),glm::vec3(1.0, 0.0, 0.0),glm::vec2(1.0, 0.0)),
@@ -1076,10 +1083,10 @@ lazy_static! {
         Vertex::new(glm::vec3(-0.5, 0.5, -0.5), glm::vec3(1.0, 1.0, 1.0), glm::vec2(1.0, 1.0)),
     ];
 }
-const INDICES: &[u16] = &[
+const INDICES: &[u32] = &[
     0, 1, 2, 2, 3, 0,
     4, 5, 6, 6, 7, 4,
-];
+]; */
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
@@ -1087,6 +1094,29 @@ struct Vertex {
     pos: glm::Vec3,
     color: glm::Vec3,
     tex_coord: glm::Vec2,
+}
+
+impl PartialEq for Vertex {
+    fn eq(&self, other: &Self) -> bool {
+        self.pos == other.pos
+            && self.color == other.color
+            && self.tex_coord == other.tex_coord
+    }
+}
+
+impl Eq for Vertex {}
+
+impl Hash for Vertex {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.pos[0].to_bits().hash(state);
+        self.pos[1].to_bits().hash(state);
+        self.pos[2].to_bits().hash(state);
+        self.color[0].to_bits().hash(state);
+        self.color[1].to_bits().hash(state);
+        self.color[2].to_bits().hash(state);
+        self.tex_coord[0].to_bits().hash(state);
+        self.tex_coord[1].to_bits().hash(state);
+    }
 }
 
 impl Vertex {
@@ -1130,7 +1160,7 @@ unsafe fn create_vertex_buffer(
     device: &Device,
     data: &mut AppData,
 ) -> Result<()> {
-    let size = (size_of::<Vertex>() * VERTICES.len()) as u64;
+    let size = (size_of::<Vertex>() * data.vertices.len()) as u64;
 
     let (staging_buffer, staging_buffer_memory) = create_buffer(
         instance,
@@ -1148,7 +1178,7 @@ unsafe fn create_vertex_buffer(
         vk::MemoryMapFlags::empty(),
     )?;
 
-    memcpy(VERTICES.as_ptr(), memory.cast(), VERTICES.len());
+    memcpy(data.vertices.as_ptr(), memory.cast(), data.vertices.len());
 
     device.unmap_memory(staging_buffer_memory);
 
@@ -1243,7 +1273,7 @@ unsafe fn create_index_buffer(
     device: &Device,
     data: &mut AppData,
 ) -> Result<()> {
-    let size = (size_of::<u16>() * INDICES.len()) as u64;
+    let size = (size_of::<u32>() * data.indices.len()) as u64;
 
     let (staging_buffer, staging_buffer_memory) = create_buffer(
         instance,
@@ -1261,7 +1291,7 @@ unsafe fn create_index_buffer(
         vk::MemoryMapFlags::empty(),
     )?;
 
-    memcpy(INDICES.as_ptr(), memory.cast(), INDICES.len());
+    memcpy(data.indices.as_ptr(), memory.cast(), data.indices.len());
 
     device.unmap_memory(staging_buffer_memory);
 
@@ -1533,7 +1563,7 @@ unsafe fn create_texture_image(
     device: &Device,
     data: &mut AppData,
 ) -> Result<()> {
-    let image = File::open("resources/breen.png")?;
+    let image = File::open("resources/viking_room.png")?;
 
     let decoder = png::Decoder::new(image);
     let (info, mut reader) = decoder.read_info()?;
@@ -1833,4 +1863,46 @@ unsafe fn get_depth_format(instance: &Instance, data: &AppData) -> Result<vk::Fo
         vk::ImageTiling::OPTIMAL,
         vk::FormatFeatureFlags::DEPTH_STENCIL_ATTACHMENT,
     )
+}
+
+fn load_model(data: &mut AppData) -> Result<()> {
+    let mut reader = BufReader::new(File::open("resources/viking_room.obj")?);
+
+    let (models, _) = tobj::load_obj_buf(&mut reader, true, |_| {
+        Ok((vec![tobj::Material::empty()], HashMap::new()))
+    })?;
+
+    let mut unique_vertices = HashMap::new();
+
+    for model in &models {
+        for index in &model.mesh.indices {
+            let pos_offset = (3 * index) as usize;
+            let tex_coord_offset = (2 * index) as usize;
+
+            let vertex = Vertex {
+                pos: glm::vec3(
+                    model.mesh.positions[pos_offset],
+                    model.mesh.positions[pos_offset + 1],
+                    model.mesh.positions[pos_offset + 2],
+                ),
+                color: glm::vec3(1.0, 1.0, 1.0),
+                tex_coord: glm::vec2(
+                    model.mesh.texcoords[tex_coord_offset],
+                    1.0 - model.mesh.texcoords[tex_coord_offset + 1],
+                ),
+            };
+
+            if let Some(index) = unique_vertices.get(&vertex) {
+                data.indices.push(*index as u32);
+            } else {
+                let index = data.vertices.len();
+                unique_vertices.insert(vertex, index);
+                data.vertices.push(vertex);
+                data.indices.push(index as u32);
+            }
+
+        }
+    }
+
+    Ok(())
 }
