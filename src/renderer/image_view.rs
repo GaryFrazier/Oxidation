@@ -1,4 +1,6 @@
-use crate::{AppData, begin_single_time_commands, end_single_time_commands, get_memory_type_index};
+use crate::AppData;
+use crate::memory::buffer;
+
 use anyhow::{anyhow, Result};
 use vulkanalia::prelude::v1_0::*;
 
@@ -38,7 +40,7 @@ pub unsafe fn create_image(
 
     let info = vk::MemoryAllocateInfo::builder()
         .allocation_size(requirements.size)
-        .memory_type_index(get_memory_type_index(
+        .memory_type_index(buffer::get_memory_type_index(
             instance,
             data,
             properties,
@@ -140,7 +142,7 @@ pub unsafe fn copy_buffer_to_image(
     width: u32,
     height: u32,
 ) -> Result<()> {
-    let command_buffer = begin_single_time_commands(device, data)?;
+    let command_buffer = buffer::begin_single_time_commands(device, data)?;
 
     let subresource = vk::ImageSubresourceLayers::builder()
         .aspect_mask(vk::ImageAspectFlags::COLOR)
@@ -164,7 +166,7 @@ pub unsafe fn copy_buffer_to_image(
         &[region],
     );
         
-    end_single_time_commands(device, data, command_buffer)?;
+    buffer::end_single_time_commands(device, data, command_buffer)?;
 
     Ok(())
 }
@@ -206,7 +208,7 @@ pub unsafe fn transition_image_layout(
     };
 
     
-    let command_buffer = begin_single_time_commands(device, data)?;
+    let command_buffer = buffer::begin_single_time_commands(device, data)?;
 
     let aspect_mask = if new_layout == vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL {
         match format {
@@ -245,7 +247,7 @@ pub unsafe fn transition_image_layout(
         &[barrier],
     );
         
-    end_single_time_commands(device, data, command_buffer)?;
+    buffer::end_single_time_commands(device, data, command_buffer)?;
 
     Ok(())
 }

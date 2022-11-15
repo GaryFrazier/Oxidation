@@ -1,5 +1,7 @@
-use crate::{AppData, begin_single_time_commands, end_single_time_commands, create_buffer};
+use crate::AppData;
 use crate::renderer::image_view;
+use crate::memory::buffer;
+
 use std::ptr::copy_nonoverlapping as memcpy;
 use std::fs::File;
 use anyhow::{anyhow, Result};
@@ -21,7 +23,7 @@ pub unsafe fn create_texture_image(
 
     let size = info.buffer_size() as u64;
 
-    let (staging_buffer, staging_buffer_memory) = create_buffer(
+    let (staging_buffer, staging_buffer_memory) = buffer::create_buffer(
         instance,
         device,
         data,
@@ -153,7 +155,7 @@ unsafe fn generate_mipmaps(
         return Err(anyhow!("Texture image format does not support linear blitting!"));
     }
 
-    let command_buffer = begin_single_time_commands(device, data)?;
+    let command_buffer = buffer::begin_single_time_commands(device, data)?;
 
     let subresource = vk::ImageSubresourceRange::builder()
         .aspect_mask(vk::ImageAspectFlags::COLOR)
@@ -269,7 +271,7 @@ unsafe fn generate_mipmaps(
         &[barrier],
     );
 
-    end_single_time_commands(device, data, command_buffer)?;
+    buffer::end_single_time_commands(device, data, command_buffer)?;
 
     Ok(())
 }
