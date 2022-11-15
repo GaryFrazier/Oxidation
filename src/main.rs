@@ -5,6 +5,7 @@
     clippy::unnecessary_wraps
 )]
 
+
 use std::collections::HashSet;
 use std::ffi::CStr;
 use std::os::raw::c_void;
@@ -34,6 +35,10 @@ use log::*;
 
 use nalgebra_glm as glm;
 //use lazy_static::lazy_static;
+
+use crate::renderer::command_pool;
+pub mod renderer;
+
 
 const VALIDATION_ENABLED: bool =
     cfg!(debug_assertions);
@@ -98,7 +103,7 @@ fn main() -> Result<()> {
 
 /// Our Vulkan app.
 #[derive(Clone, Debug)]
-struct App {
+pub struct App {
     entry: Entry,
     instance: Instance,
     data: AppData,
@@ -124,8 +129,8 @@ impl App {
         create_render_pass(&instance, &device, &mut data)?;
         create_descriptor_set_layout(&device, &mut data)?;
         create_pipeline(&device, &mut data)?;  
-        create_command_pool(&instance, &device, &mut data)?;
-        create_command_pools(&instance, &device, &mut data)?;
+        command_pool::create_command_pool(&instance, &device, &mut data)?;
+        command_pool::create_command_pools(&instance, &device, &mut data)?;
         create_color_objects(&instance, &device, &mut data)?;
         create_depth_objects(&instance, &device, &mut data)?;
         create_framebuffers(&device, &mut data)?;
@@ -391,7 +396,7 @@ impl App {
             .render_area(render_area)
             .clear_values(clear_values);
 
-        self.device.cmd_begin_render_pass(command_buffer, &info, vk::SubpassContents::INLINE);
+        self.device.cmd_begin_render_pass(command_buffer, &info, vk::SubpassContents::SECONDARY_COMMAND_BUFFERS);
 
         let secondary_command_buffers = (0..self.models)
             .map(|i| self.update_secondary_command_buffer(image_index, i))
@@ -495,7 +500,7 @@ impl App {
 
 /// The Vulkan handles and associated properties used by our Vulkan app.
 #[derive(Clone, Debug, Default)]
-struct AppData {
+pub struct AppData {
     messenger: vk::DebugUtilsMessengerEXT,
     physical_device: vk::PhysicalDevice,
     msaa_samples: vk::SampleCountFlags,
@@ -746,7 +751,7 @@ unsafe fn create_logical_device(
 }
 
 #[derive(Copy, Clone, Debug)]
-struct QueueFamilyIndices {
+pub struct QueueFamilyIndices {
     graphics: u32,
     present: u32,
 }
@@ -2257,36 +2262,4 @@ unsafe fn create_color_objects(
     )?;
 
     Ok(())
-}
-
-// command pools
-
-unsafe fn create_command_pools(
-    instance: &Instance,
-    device: &Device,
-    data: &mut AppData,
-) -> Result<()> {
-    data.command_pool = create_command_pool(instance, device, data)?;
-
-    let num_images = data.swapchain_images.len();
-    for _ in 0..num_images {
-        let command_pool = create_command_pool(instance, device, data)?;
-        data.command_pools.push(command_pool);
-    }
-
-    Ok(())
-}
-
-unsafe fn create_command_pool(
-    instance: &Instance,
-    device: &Device,
-    data: &mut AppData,
-) -> Result<vk::CommandPool> {
-    let indices = QueueFamilyIndices::get(instance, data, data.physical_device)?;
-
-    let info = vk::CommandPoolCreateInfo::builder()
-        .flags(vk::CommandPoolCreateFlags::TRANSIENT)
-        .queue_family_index(indices.graphics);
-
-    Ok(device.create_command_pool(&info, None)?)
 }
