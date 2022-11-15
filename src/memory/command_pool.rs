@@ -1,4 +1,5 @@
-use crate::{AppData, QueueFamilyIndices};
+use crate::AppData;
+use crate::renderer::device;
 use anyhow::Result;
 use vulkanalia::prelude::v1_0::*;
 
@@ -23,7 +24,7 @@ pub unsafe fn create_command_pool(
     device: &Device,
     data: &mut AppData,
 ) -> Result<vk::CommandPool> {
-    let indices = QueueFamilyIndices::get(instance, data, data.physical_device)?;
+    let indices = device::QueueFamilyIndices::get(instance, data, data.physical_device)?;
 
     let info = vk::CommandPoolCreateInfo::builder()
         .flags(vk::CommandPoolCreateFlags::TRANSIENT)

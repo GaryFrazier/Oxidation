@@ -19,7 +19,6 @@ use std::io::BufReader;
 use anyhow::{anyhow, Result};
 use log::*;
 use nalgebra_glm as glm;
-use thiserror::Error;
 use vulkanalia::loader::{LibloadingLoader, LIBRARY};
 use vulkanalia::window as vk_window;
 use vulkanalia::vk::ExtDebugUtilsExtension;
@@ -40,6 +39,8 @@ use crate::renderer::image_view;
 use crate::renderer::swapchain;
 use crate::renderer::descriptor;
 use crate::renderer::render_pass;
+use crate::renderer::pipeline;
+use crate::renderer::device;
 use crate::memory::buffer;
 use crate::memory::command_pool;
 use crate::memory::framebuffer;
@@ -49,13 +50,12 @@ use crate::memory::sync;
 pub mod renderer;
 pub mod memory;
 
-const VALIDATION_ENABLED: bool =
+pub const VALIDATION_ENABLED: bool =
     cfg!(debug_assertions);
 
-const VALIDATION_LAYER: vk::ExtensionName =
+pub const VALIDATION_LAYER: vk::ExtensionName =
     vk::ExtensionName::from_bytes(b"VK_LAYER_KHRONOS_validation");
 
-const DEVICE_EXTENSIONS: &[vk::ExtensionName] = &[vk::KHR_SWAPCHAIN_EXTENSION.name];
 pub const MAX_FRAMES_IN_FLIGHT: usize = 2;
 
 fn main() -> Result<()> {
@@ -131,13 +131,13 @@ impl App {
         let mut data = AppData::default();
         let instance = create_instance(window, &entry, &mut data)?;
         data.surface = vk_window::create_surface(&instance, window)?;
-        pick_physical_device(&instance, &mut data)?;
-        let device = create_logical_device(&instance, &mut data)?;
+        device::pick_physical_device(&instance, &mut data)?;
+        let device = device::create_logical_device(&instance, &mut data)?;
         swapchain::create_swapchain(window, &instance, &device, &mut data)?;
         swapchain::create_swapchain_image_views(&device, &mut data)?;
         render_pass::create_render_pass(&instance, &device, &mut data)?;
         descriptor::create_descriptor_set_layout(&device, &mut data)?;
-        create_pipeline(&device, &mut data)?;  
+        pipeline::create_pipeline(&device, &mut data)?;  
         command_pool::create_command_pool(&instance, &device, &mut data)?;
         command_pool::create_command_pools(&instance, &device, &mut data)?;
         image_view::create_color_objects(&instance, &device, &mut data)?;
@@ -274,7 +274,7 @@ impl App {
         swapchain::create_swapchain(window, &self.instance, &self.device, &mut self.data)?;
         swapchain::create_swapchain_image_views(&self.device, &mut self.data)?;
         render_pass::create_render_pass(&self.instance, &self.device, &mut self.data)?;
-        create_pipeline(&self.device, &mut self.data)?;
+        pipeline::create_pipeline(&self.device, &mut self.data)?;
         image_view::create_color_objects(&self.instance, &self.device, &mut self.data)?;
         depth_attachment::create_depth_objects(&self.instance, &self.device, &mut self.data)?;
         framebuffer::create_framebuffers(&self.device, &mut self.data)?;
@@ -642,315 +642,6 @@ extern "system" fn debug_callback(
     }
 
     vk::FALSE
-}
-
-#[derive(Debug, Error)]
-#[error("Missing {0}.")]
-pub struct SuitabilityError(pub &'static str);
-
-unsafe fn pick_physical_device(instance: &Instance, data: &mut AppData) -> Result<()> {
-    for physical_device in instance.enumerate_physical_devices()? {
-        let properties = instance.get_physical_device_properties(physical_device);
-
-        if let Err(error) = check_physical_device(instance, data, physical_device) {
-            warn!("Skipping physical device (`{}`): {}", properties.device_name, error);
-        } else {
-            info!("Selected physical device (`{}`).", properties.device_name);
-            data.physical_device = physical_device;
-            data.msaa_samples = image_view::get_max_msaa_samples(instance, data);
-            return Ok(());
-        }
-    }
-
-    Err(anyhow!("Failed to find suitable physical device."))
-}
-
-unsafe fn check_physical_device(
-    instance: &Instance,
-    data: &AppData,
-    physical_device: vk::PhysicalDevice,
-) -> Result<()> {
-    let properties = instance.get_physical_device_properties(physical_device);
-    if properties.device_type != vk::PhysicalDeviceType::DISCRETE_GPU {
-        return Err(anyhow!(SuitabilityError("Only discrete GPUs are supported.")));
-    }
-
-    let features = instance.get_physical_device_features(physical_device);
-    if features.geometry_shader != vk::TRUE {
-        return Err(anyhow!(SuitabilityError("Missing geometry shader support.")));
-    }
-
-    if features.sampler_anisotropy != vk::TRUE {
-        return Err(anyhow!(SuitabilityError("No sampler anisotropy.")));
-    }
-    
-    QueueFamilyIndices::get(instance, data, physical_device)?;
-    check_physical_device_extensions(instance, physical_device)?;
-
-    let support = swapchain::SwapchainSupport::get(instance, data, physical_device)?;
-    if support.formats.is_empty() || support.present_modes.is_empty() {
-        return Err(anyhow!(SuitabilityError("Insufficient swapchain support.")));
-    }
-
-    Ok(())
-}
-
-unsafe fn check_physical_device_extensions(
-    instance: &Instance,
-    physical_device: vk::PhysicalDevice,
-) -> Result<()> {
-    let extensions = instance
-        .enumerate_device_extension_properties(physical_device, None)?
-        .iter()
-        .map(|e| e.extension_name)
-        .collect::<HashSet<_>>();
-    if DEVICE_EXTENSIONS.iter().all(|e| extensions.contains(e)) {
-        Ok(())
-    } else {
-        Err(anyhow!(SuitabilityError("Missing required device extensions.")))
-    }
-}
-
-unsafe fn create_logical_device(
-    instance: &Instance,
-    data: &mut AppData,
-) -> Result<Device> {
-    let extensions = DEVICE_EXTENSIONS
-        .iter()
-        .map(|n| n.as_ptr())
-        .collect::<Vec<_>>();
-
-    let indices = QueueFamilyIndices::get(instance, data, data.physical_device)?;
-
-    let mut unique_indices = HashSet::new();
-    unique_indices.insert(indices.graphics);
-    unique_indices.insert(indices.present);
-
-    let queue_priorities = &[1.0];
-    let queue_infos = unique_indices
-        .iter()
-        .map(|i| {
-            vk::DeviceQueueCreateInfo::builder()
-                .queue_family_index(*i)
-                .queue_priorities(queue_priorities)
-        })
-        .collect::<Vec<_>>();
-
-    let layers = if VALIDATION_ENABLED {
-        vec![VALIDATION_LAYER.as_ptr()]
-    } else {
-        vec![]
-    };
-
-    let features = vk::PhysicalDeviceFeatures::builder()
-        .sampler_anisotropy(true)
-        .sample_rate_shading(true);
-
-    let info = vk::DeviceCreateInfo::builder()
-        .queue_create_infos(&queue_infos)
-        .enabled_layer_names(&layers)
-        .enabled_extension_names(&extensions)
-        .enabled_features(&features);
-
-    let device = instance.create_device(data.physical_device, &info, None)?;
-    data.graphics_queue = device.get_device_queue(indices.graphics, 0);
-    data.present_queue = device.get_device_queue(indices.present, 0);
-    
-    Ok(device)
-}
-
-#[derive(Copy, Clone, Debug)]
-pub struct QueueFamilyIndices {
-    graphics: u32,
-    present: u32,
-}
-
-impl QueueFamilyIndices {
-    unsafe fn get(
-        instance: &Instance,
-        data: &AppData,
-        physical_device: vk::PhysicalDevice,
-    ) -> Result<Self> {
-        let mut present = None;
-
-        let properties = instance
-            .get_physical_device_queue_family_properties(physical_device);
-
-        for (index, properties) in properties.iter().enumerate() {
-            if instance.get_physical_device_surface_support_khr(
-                physical_device,
-                index as u32,
-                data.surface,
-            )? {
-                present = Some(index as u32);
-                break;
-            }
-        }  
-
-        let graphics = properties
-            .iter()
-            .position(|p| p.queue_flags.contains(vk::QueueFlags::GRAPHICS))
-            .map(|i| i as u32);
-
-            if let (Some(graphics), Some(present)) = (graphics, present) {
-                Ok(Self { graphics, present })
-            } else {
-                Err(anyhow!(SuitabilityError("Missing required queue families.")))
-            }
-    }
-}
-
-unsafe fn create_pipeline(device: &Device, data: &mut AppData) -> Result<()> {
-    let vert = include_bytes!("../shaders/vert.spv");
-    let frag = include_bytes!("../shaders/frag.spv");
-
-    let vert_shader_module = create_shader_module(device, &vert[..])?;
-    let frag_shader_module = create_shader_module(device, &frag[..])?;
-
-    let vert_stage = vk::PipelineShaderStageCreateInfo::builder()
-        .stage(vk::ShaderStageFlags::VERTEX)
-        .module(vert_shader_module)
-        .name(b"main\0");
-
-    let frag_stage = vk::PipelineShaderStageCreateInfo::builder()
-        .stage(vk::ShaderStageFlags::FRAGMENT)
-        .module(frag_shader_module)
-        .name(b"main\0");
-
-    let binding_descriptions = &[vertex_buffer::Vertex::binding_description()];
-    let attribute_descriptions = vertex_buffer::Vertex::attribute_descriptions();
-    let vertex_input_state = vk::PipelineVertexInputStateCreateInfo::builder()
-        .vertex_binding_descriptions(binding_descriptions)
-        .vertex_attribute_descriptions(&attribute_descriptions);
-    let input_assembly_state = vk::PipelineInputAssemblyStateCreateInfo::builder()
-        .topology(vk::PrimitiveTopology::TRIANGLE_LIST)
-        .primitive_restart_enable(false);
-
-    let viewport = vk::Viewport::builder()
-        .x(0.0)
-        .y(0.0)
-        .width(data.swapchain_extent.width as f32)
-        .height(data.swapchain_extent.height as f32)
-        .min_depth(0.0)
-        .max_depth(1.0);
-
-    let scissor = vk::Rect2D::builder()
-        .offset(vk::Offset2D { x: 0, y: 0 })
-        .extent(data.swapchain_extent);
-
-    let viewports = &[viewport];
-    let scissors = &[scissor];
-    let viewport_state = vk::PipelineViewportStateCreateInfo::builder()
-        .viewports(viewports)
-        .scissors(scissors);
-
-    let rasterization_state = vk::PipelineRasterizationStateCreateInfo::builder()
-        .depth_clamp_enable(false)
-        .rasterizer_discard_enable(false)
-        .polygon_mode(vk::PolygonMode::FILL) // FILL, LINE, POINT
-        .line_width(1.0)
-        .cull_mode(vk::CullModeFlags::BACK)
-        .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
-        .depth_bias_enable(false);
-
-    let multisample_state = vk::PipelineMultisampleStateCreateInfo::builder()
-        .sample_shading_enable(true)
-        .min_sample_shading(0.2)
-        .rasterization_samples(data.msaa_samples);
-
-    let attachment = vk::PipelineColorBlendAttachmentState::builder()
-        .color_write_mask(vk::ColorComponentFlags::all())
-        .blend_enable(true)
-        .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
-        .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
-        .color_blend_op(vk::BlendOp::ADD)
-        .src_alpha_blend_factor(vk::BlendFactor::ONE)
-        .dst_alpha_blend_factor(vk::BlendFactor::ZERO)
-        .alpha_blend_op(vk::BlendOp::ADD);
-
-    let attachments = &[attachment];
-    let color_blend_state = vk::PipelineColorBlendStateCreateInfo::builder()
-        .logic_op_enable(false)
-        .logic_op(vk::LogicOp::COPY)
-        .attachments(attachments)
-        .blend_constants([0.0, 0.0, 0.0, 0.0]);
-
-    let dynamic_states = &[
-        vk::DynamicState::VIEWPORT,
-        vk::DynamicState::LINE_WIDTH,
-    ];
-    
-    let dynamic_state = vk::PipelineDynamicStateCreateInfo::builder()
-        .dynamic_states(dynamic_states);
-
-    let vert_push_constant_range = vk::PushConstantRange::builder()
-        .stage_flags(vk::ShaderStageFlags::VERTEX)
-        .offset(0)
-        .size(64 /* 16 × 4 byte floats */);
-
-    let frag_push_constant_range = vk::PushConstantRange::builder()
-        .stage_flags(vk::ShaderStageFlags::FRAGMENT)
-        .offset(64)
-        .size(4);
-        
-    let set_layouts = &[data.descriptor_set_layout];
-    let push_constant_ranges = &[vert_push_constant_range, frag_push_constant_range];
-    let layout_info = vk::PipelineLayoutCreateInfo::builder()
-        .set_layouts(set_layouts)
-        .push_constant_ranges(push_constant_ranges);
-
-    data.pipeline_layout = device.create_pipeline_layout(&layout_info, None)?;
-
-    let stages = &[vert_stage, frag_stage];
-    
-    let depth_stencil_state = vk::PipelineDepthStencilStateCreateInfo::builder()
-        .depth_test_enable(true)
-        .depth_write_enable(true)
-        .depth_compare_op(vk::CompareOp::LESS)
-        .depth_bounds_test_enable(false)
-        .min_depth_bounds(0.0) // Optional.
-        .max_depth_bounds(1.0) // Optional.
-        .stencil_test_enable(false);
-
-    let info = vk::GraphicsPipelineCreateInfo::builder()
-        .stages(stages)
-        .vertex_input_state(&vertex_input_state)
-        .input_assembly_state(&input_assembly_state)
-        .viewport_state(&viewport_state)
-        .rasterization_state(&rasterization_state)
-        .multisample_state(&multisample_state)
-        .depth_stencil_state(&depth_stencil_state)
-        .color_blend_state(&color_blend_state)
-        .layout(data.pipeline_layout)
-        .render_pass(data.render_pass)
-        .subpass(0)
-        .base_pipeline_handle(vk::Pipeline::null()) // Optional.
-        .base_pipeline_index(-1);                    // Optional.
-    
-    data.pipeline = device.create_graphics_pipelines(
-        vk::PipelineCache::null(), &[info], None)?.0;
-
-    device.destroy_shader_module(vert_shader_module, None);
-    device.destroy_shader_module(frag_shader_module, None);
-    
-    Ok(())
-}
-
-unsafe fn create_shader_module(
-    device: &Device,
-    bytecode: &[u8],
-) -> Result<vk::ShaderModule> {
-    let bytecode = Vec::<u8>::from(bytecode);
-    let (prefix, code, suffix) = bytecode.align_to::<u32>();
-    if !prefix.is_empty() || !suffix.is_empty() {
-        return Err(anyhow!("Shader bytecode is not properly aligned."));
-    }
-
-    let info = vk::ShaderModuleCreateInfo::builder()
-        .code_size(bytecode.len())
-        .code(code);
-
-    Ok(device.create_shader_module(&info, None)?)
 }
 
 fn load_model(data: &mut AppData) -> Result<()> {

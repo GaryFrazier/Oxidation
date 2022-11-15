@@ -1,5 +1,6 @@
-use crate::{AppData, QueueFamilyIndices};
+use crate::AppData;
 use crate::renderer::image_view;
+use crate::renderer::device;
 
 use anyhow::Result;
 use vulkanalia::prelude::v1_0::*;
@@ -13,7 +14,7 @@ pub unsafe fn create_swapchain(
     device: &Device,
     data: &mut AppData,
 ) -> Result<()> {
-    let indices = QueueFamilyIndices::get(instance, data, data.physical_device)?;
+    let indices = device::QueueFamilyIndices::get(instance, data, data.physical_device)?;
     let support = SwapchainSupport::get(instance, data, data.physical_device)?;
 
     let surface_format = get_swapchain_surface_format(&support.formats);
