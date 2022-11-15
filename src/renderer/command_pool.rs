@@ -1,11 +1,11 @@
-use crate as app;
+use crate::{AppData, QueueFamilyIndices};
 use anyhow::Result;
 use vulkanalia::prelude::v1_0::*;
 
 pub unsafe fn create_command_pools(
-    instance: &app::Instance,
-    device: &app::Device,
-    data: &mut app::AppData,
+    instance: &Instance,
+    device: &Device,
+    data: &mut AppData,
 ) -> Result<()> {
     data.command_pool = create_command_pool(instance, device, data)?;
 
@@ -19,11 +19,11 @@ pub unsafe fn create_command_pools(
 }
 
 pub unsafe fn create_command_pool(
-    instance: &app::Instance,
-    device: &app::Device,
-    data: &mut app::AppData,
+    instance: &Instance,
+    device: &Device,
+    data: &mut AppData,
 ) -> Result<vk::CommandPool> {
-    let indices = app::QueueFamilyIndices::get(instance, data, data.physical_device)?;
+    let indices = QueueFamilyIndices::get(instance, data, data.physical_device)?;
 
     let info = vk::CommandPoolCreateInfo::builder()
         .flags(vk::CommandPoolCreateFlags::TRANSIENT)
