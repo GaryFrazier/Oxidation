@@ -14,7 +14,6 @@ use std::ptr::copy_nonoverlapping as memcpy;
 use std::time::Instant;
 use std::fs::File;
 use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
 use std::io::BufReader;
 
 use anyhow::{anyhow, Result};
@@ -42,6 +41,9 @@ use crate::renderer::swapchain;
 use crate::renderer::descriptor;
 use crate::memory::buffer;
 use crate::memory::command_pool;
+use crate::memory::framebuffer;
+use crate::memory::index_buffer;
+use crate::memory::vertex_buffer;
 pub mod renderer;
 pub mod memory;
 
@@ -138,17 +140,17 @@ impl App {
         command_pool::create_command_pools(&instance, &device, &mut data)?;
         image_view::create_color_objects(&instance, &device, &mut data)?;
         depth_attachment::create_depth_objects(&instance, &device, &mut data)?;
-        create_framebuffers(&device, &mut data)?;
+        framebuffer::create_framebuffers(&device, &mut data)?;
         texture::create_texture_image(&instance, &device, &mut data)?;
         texture::create_texture_image_view(&device, &mut data)?;
         texture::create_texture_sampler(&device, &mut data)?;
         load_model(&mut data)?;
-        create_vertex_buffer(&instance, &device, &mut data)?;
-        create_index_buffer(&instance, &device, &mut data)?;
+        vertex_buffer::create_vertex_buffer(&instance, &device, &mut data)?;
+        index_buffer::create_index_buffer(&instance, &device, &mut data)?;
         descriptor::create_uniform_buffers(&instance, &device, &mut data)?;
         descriptor::create_descriptor_pool(&device, &mut data)?;
         descriptor::create_descriptor_sets(&device, &mut data)?;
-        create_command_buffers(&device, &mut data)?;
+        buffer::create_command_buffers(&device, &mut data)?;
         create_sync_objects(&device, &mut data)?;
 
         let frame = 0;
@@ -273,11 +275,11 @@ impl App {
         create_pipeline(&self.device, &mut self.data)?;
         image_view::create_color_objects(&self.instance, &self.device, &mut self.data)?;
         depth_attachment::create_depth_objects(&self.instance, &self.device, &mut self.data)?;
-        create_framebuffers(&self.device, &mut self.data)?;
+        framebuffer::create_framebuffers(&self.device, &mut self.data)?;
         descriptor::create_uniform_buffers(&self.instance, &self.device, &mut self.data)?;
         descriptor::create_descriptor_pool(&self.device, &mut self.data)?;
         descriptor::create_descriptor_sets(&self.device, &mut self.data)?;
-        create_command_buffers(&self.device, &mut self.data)?;
+        buffer::create_command_buffers(&self.device, &mut self.data)?;
         self.data
             .images_in_flight
             .resize(self.data.swapchain_images.len(), vk::Fence::null());
@@ -530,7 +532,7 @@ pub struct AppData {
     render_finished_semaphores: Vec<vk::Semaphore>,
     in_flight_fences: Vec<vk::Fence>,
     images_in_flight: Vec<vk::Fence>,
-    vertices: Vec<Vertex>,
+    vertices: Vec<vertex_buffer::Vertex>,
     indices: Vec<u32>,
     vertex_buffer: vk::Buffer,
     vertex_buffer_memory: vk::DeviceMemory,
@@ -813,8 +815,8 @@ unsafe fn create_pipeline(device: &Device, data: &mut AppData) -> Result<()> {
         .module(frag_shader_module)
         .name(b"main\0");
 
-    let binding_descriptions = &[Vertex::binding_description()];
-    let attribute_descriptions = Vertex::attribute_descriptions();
+    let binding_descriptions = &[vertex_buffer::Vertex::binding_description()];
+    let attribute_descriptions = vertex_buffer::Vertex::attribute_descriptions();
     let vertex_input_state = vk::PipelineVertexInputStateCreateInfo::builder()
         .vertex_binding_descriptions(binding_descriptions)
         .vertex_attribute_descriptions(&attribute_descriptions);
@@ -1032,42 +1034,6 @@ unsafe fn create_render_pass(
     Ok(())
 }
 
-unsafe fn create_framebuffers(device: &Device, data: &mut AppData) -> Result<()> {
-    data.framebuffers = data
-        .swapchain_image_views
-        .iter()
-        .map(|i| {
-            let attachments = &[data.color_image_view, data.depth_image_view, *i];
-            let create_info = vk::FramebufferCreateInfo::builder()
-                .render_pass(data.render_pass)
-                .attachments(attachments)
-                .width(data.swapchain_extent.width)
-                .height(data.swapchain_extent.height)
-                .layers(1);
-
-            device.create_framebuffer(&create_info, None)
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-
-    Ok(())
-}
-
-unsafe fn create_command_buffers(device: &Device, data: &mut AppData) -> Result<()> {
-    let num_images = data.swapchain_images.len();
-    for image_index in 0..num_images {
-        let allocate_info = vk::CommandBufferAllocateInfo::builder()
-            .command_pool(data.command_pools[image_index])
-            .level(vk::CommandBufferLevel::PRIMARY)
-            .command_buffer_count(1);
-
-        let command_buffer = device.allocate_command_buffers(&allocate_info)?[0];
-        data.command_buffers.push(command_buffer);
-    }
-
-    data.secondary_command_buffers = vec![vec![]; data.swapchain_images.len()];
-    Ok(())
-}
-
 unsafe fn create_sync_objects(device: &Device, data: &mut AppData) -> Result<()> {
     let semaphore_info = vk::SemaphoreCreateInfo::builder();
     let fence_info = vk::FenceCreateInfo::builder()
@@ -1089,185 +1055,6 @@ unsafe fn create_sync_objects(device: &Device, data: &mut AppData) -> Result<()>
     Ok(())
 }
 
-// verts 
-
-/*
-lazy_static! {
-    static ref VERTICES: Vec<Vertex> = vec![
-        Vertex::new(glm::vec3(-0.5, -0.5, 0.0),glm::vec3(1.0, 0.0, 0.0),glm::vec2(1.0, 0.0)),
-        Vertex::new(glm::vec3(0.5, -0.5, 0.0), glm::vec3(0.0, 1.0, 0.0), glm::vec2(0.0, 0.0)),
-        Vertex::new(glm::vec3(0.5, 0.5, 0.0), glm::vec3(0.0, 0.0, 1.0), glm::vec2(0.0, 1.0)),
-        Vertex::new(glm::vec3(-0.5, 0.5, 0.0), glm::vec3(1.0, 1.0, 1.0), glm::vec2(1.0, 1.0)),
-        Vertex::new(glm::vec3(-0.5, -0.5, -0.5), glm::vec3(1.0, 0.0, 0.0), glm::vec2(1.0, 0.0)),
-        Vertex::new(glm::vec3(0.5, -0.5, -0.5), glm::vec3(0.0, 1.0, 0.0), glm::vec2(0.0, 0.0)),
-        Vertex::new(glm::vec3(0.5, 0.5, -0.5), glm::vec3(0.0, 0.0, 1.0), glm::vec2(0.0, 1.0)),
-        Vertex::new(glm::vec3(-0.5, 0.5, -0.5), glm::vec3(1.0, 1.0, 1.0), glm::vec2(1.0, 1.0)),
-    ];
-}
-const INDICES: &[u32] = &[
-    0, 1, 2, 2, 3, 0,
-    4, 5, 6, 6, 7, 4,
-]; */
-
-#[repr(C)]
-#[derive(Copy, Clone, Debug)]
-struct Vertex {
-    pos: glm::Vec3,
-    color: glm::Vec3,
-    tex_coord: glm::Vec2,
-}
-
-impl PartialEq for Vertex {
-    fn eq(&self, other: &Self) -> bool {
-        self.pos == other.pos
-            && self.color == other.color
-            && self.tex_coord == other.tex_coord
-    }
-}
-
-impl Eq for Vertex {}
-
-impl Hash for Vertex {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.pos[0].to_bits().hash(state);
-        self.pos[1].to_bits().hash(state);
-        self.pos[2].to_bits().hash(state);
-        self.color[0].to_bits().hash(state);
-        self.color[1].to_bits().hash(state);
-        self.color[2].to_bits().hash(state);
-        self.tex_coord[0].to_bits().hash(state);
-        self.tex_coord[1].to_bits().hash(state);
-    }
-}
-
-impl Vertex {
-    fn new(pos: glm::Vec3, color: glm::Vec3, tex_coord: glm::Vec2) -> Self {
-        Self { pos, color, tex_coord }
-    }
-
-    fn binding_description() -> vk::VertexInputBindingDescription {
-        vk::VertexInputBindingDescription::builder()
-            .binding(0)
-            .stride(size_of::<Vertex>() as u32)
-            .input_rate(vk::VertexInputRate::VERTEX)
-            .build()
-    }
-
-    fn attribute_descriptions() -> [vk::VertexInputAttributeDescription; 3] {
-        let pos = vk::VertexInputAttributeDescription::builder()
-            .binding(0)
-            .location(0)
-            .format(vk::Format::R32G32B32_SFLOAT)
-            .offset(0)
-            .build();
-        let color = vk::VertexInputAttributeDescription::builder()
-            .binding(0)
-            .location(1)
-            .format(vk::Format::R32G32B32_SFLOAT)
-            .offset(size_of::<glm::Vec3>() as u32)
-            .build();
-        let tex_coord = vk::VertexInputAttributeDescription::builder()
-            .binding(0)
-            .location(2)
-            .format(vk::Format::R32G32_SFLOAT)
-            .offset((size_of::<glm::Vec3>() + size_of::<glm::Vec3>()) as u32)
-            .build();
-        [pos, color, tex_coord]
-    }
-}
-
-unsafe fn create_vertex_buffer(
-    instance: &Instance,
-    device: &Device,
-    data: &mut AppData,
-) -> Result<()> {
-    let size = (size_of::<Vertex>() * data.vertices.len()) as u64;
-
-    let (staging_buffer, staging_buffer_memory) = buffer::create_buffer(
-        instance,
-        device,
-        data,
-        size,
-        vk::BufferUsageFlags::TRANSFER_SRC,
-        vk::MemoryPropertyFlags::HOST_COHERENT | vk::MemoryPropertyFlags::HOST_VISIBLE,
-    )?;
-
-    let memory = device.map_memory(
-        staging_buffer_memory,
-        0,
-        size,
-        vk::MemoryMapFlags::empty(),
-    )?;
-
-    memcpy(data.vertices.as_ptr(), memory.cast(), data.vertices.len());
-
-    device.unmap_memory(staging_buffer_memory);
-
-    let (vertex_buffer, vertex_buffer_memory) = buffer::create_buffer(
-        instance,
-        device,
-        data,
-        size,
-        vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::VERTEX_BUFFER,
-        vk::MemoryPropertyFlags::DEVICE_LOCAL,
-    )?;
-
-    data.vertex_buffer = vertex_buffer;
-    data.vertex_buffer_memory = vertex_buffer_memory;
-    buffer::copy_buffer(device, data, staging_buffer, vertex_buffer, size)?;
-    device.destroy_buffer(staging_buffer, None);
-    device.free_memory(staging_buffer_memory, None);
-    
-    Ok(())
-}
-
-unsafe fn create_index_buffer(
-    instance: &Instance,
-    device: &Device,
-    data: &mut AppData,
-) -> Result<()> {
-    let size = (size_of::<u32>() * data.indices.len()) as u64;
-
-    let (staging_buffer, staging_buffer_memory) = buffer::create_buffer(
-        instance,
-        device,
-        data,
-        size,
-        vk::BufferUsageFlags::TRANSFER_SRC,
-        vk::MemoryPropertyFlags::HOST_COHERENT | vk::MemoryPropertyFlags::HOST_VISIBLE,
-    )?;
-
-    let memory = device.map_memory(
-        staging_buffer_memory,
-        0,
-        size,
-        vk::MemoryMapFlags::empty(),
-    )?;
-
-    memcpy(data.indices.as_ptr(), memory.cast(), data.indices.len());
-
-    device.unmap_memory(staging_buffer_memory);
-
-    let (index_buffer, index_buffer_memory) = buffer::create_buffer(
-        instance,
-        device,
-        data,
-        size,
-        vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::INDEX_BUFFER,
-        vk::MemoryPropertyFlags::DEVICE_LOCAL,
-    )?;
-
-    data.index_buffer = index_buffer;
-    data.index_buffer_memory = index_buffer_memory;
-
-    buffer::copy_buffer(device, data, staging_buffer, index_buffer, size)?;
-
-    device.destroy_buffer(staging_buffer, None);
-    device.free_memory(staging_buffer_memory, None);
-
-    Ok(())
-}
-
 fn load_model(data: &mut AppData) -> Result<()> {
     let mut reader = BufReader::new(File::open("resources/viking_room.obj")?);
 
@@ -1282,7 +1069,7 @@ fn load_model(data: &mut AppData) -> Result<()> {
             let pos_offset = (3 * index) as usize;
             let tex_coord_offset = (2 * index) as usize;
 
-            let vertex = Vertex {
+            let vertex = vertex_buffer::Vertex {
                 pos: glm::vec3(
                     model.mesh.positions[pos_offset],
                     model.mesh.positions[pos_offset + 1],

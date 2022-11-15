@@ -6,6 +6,12 @@ use nalgebra_glm as glm;
 use std::mem::size_of;
 use vulkanalia::prelude::v1_0::*;
 
+/*
+A descriptor is a way for shaders to freely access resources like buffers and images.
+We're going to set up a buffer that contains the transformation matrices 
+and have the vertex shader access them through a descriptor
+ */
+
 pub unsafe fn create_descriptor_pool(device: &Device, data: &mut AppData) -> Result<()> {
     let ubo_size = vk::DescriptorPoolSize::builder()
         .type_(vk::DescriptorType::UNIFORM_BUFFER)
