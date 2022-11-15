@@ -1,4 +1,4 @@
-use crate::{AppData, MAX_FRAMES_IN_FLIGHT};
+use crate::app::app::{AppData, MAX_FRAMES_IN_FLIGHT};
 
 use anyhow::Result;
 use vulkanalia::prelude::v1_0::*;

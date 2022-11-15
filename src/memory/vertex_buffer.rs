@@ -1,4 +1,8 @@
-use crate::AppData;
+#![allow(
+    dead_code,
+)]
+
+use crate::app::app::AppData;
 use crate::memory::buffer;
 
 use anyhow::Result;

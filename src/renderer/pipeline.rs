@@ -1,4 +1,4 @@
-use crate::AppData;
+use crate::app::app::AppData;
 use crate::memory::vertex_buffer;
 
 use anyhow::{anyhow, Result};
@@ -78,14 +78,6 @@ pub unsafe fn create_pipeline(device: &Device, data: &mut AppData) -> Result<()>
         .logic_op(vk::LogicOp::COPY)
         .attachments(attachments)
         .blend_constants([0.0, 0.0, 0.0, 0.0]);
-
-    let dynamic_states = &[
-        vk::DynamicState::VIEWPORT,
-        vk::DynamicState::LINE_WIDTH,
-    ];
-    
-    let dynamic_state = vk::PipelineDynamicStateCreateInfo::builder()
-        .dynamic_states(dynamic_states);
 
     let vert_push_constant_range = vk::PushConstantRange::builder()
         .stage_flags(vk::ShaderStageFlags::VERTEX)

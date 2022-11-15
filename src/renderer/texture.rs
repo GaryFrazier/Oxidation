@@ -1,4 +1,4 @@
-use crate::AppData;
+use crate::app::app::AppData;
 use crate::renderer::image_view;
 use crate::memory::buffer;
 

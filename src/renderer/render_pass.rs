@@ -1,4 +1,4 @@
-use crate::AppData;
+use crate::app::app::AppData;
 use crate::renderer::depth_attachment;
 
 use anyhow::Result;

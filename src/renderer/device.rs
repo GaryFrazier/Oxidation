@@ -1,4 +1,4 @@
-use crate::{AppData, VALIDATION_ENABLED, VALIDATION_LAYER};
+use crate::app::app::{AppData, VALIDATION_ENABLED, VALIDATION_LAYER};
 use crate::renderer::image_view;
 use crate::renderer::swapchain;
 
@@ -143,7 +143,7 @@ impl QueueFamilyIndices {
         let properties = instance
             .get_physical_device_queue_family_properties(physical_device);
 
-        for (index, properties) in properties.iter().enumerate() {
+        for (index, _) in properties.iter().enumerate() {
             if instance.get_physical_device_surface_support_khr(
                 physical_device,
                 index as u32,

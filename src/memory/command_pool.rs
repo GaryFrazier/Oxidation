@@ -1,4 +1,4 @@
-use crate::AppData;
+use crate::app::app::AppData;
 use crate::renderer::device;
 use anyhow::Result;
 use vulkanalia::prelude::v1_0::*;
