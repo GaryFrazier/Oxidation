@@ -44,6 +44,7 @@ use crate::memory::command_pool;
 use crate::memory::framebuffer;
 use crate::memory::index_buffer;
 use crate::memory::vertex_buffer;
+use crate::memory::sync;
 pub mod renderer;
 pub mod memory;
 
@@ -54,7 +55,7 @@ const VALIDATION_LAYER: vk::ExtensionName =
     vk::ExtensionName::from_bytes(b"VK_LAYER_KHRONOS_validation");
 
 const DEVICE_EXTENSIONS: &[vk::ExtensionName] = &[vk::KHR_SWAPCHAIN_EXTENSION.name];
-const MAX_FRAMES_IN_FLIGHT: usize = 2;
+pub const MAX_FRAMES_IN_FLIGHT: usize = 2;
 
 fn main() -> Result<()> {
     pretty_env_logger::init();
@@ -151,7 +152,7 @@ impl App {
         descriptor::create_descriptor_pool(&device, &mut data)?;
         descriptor::create_descriptor_sets(&device, &mut data)?;
         buffer::create_command_buffers(&device, &mut data)?;
-        create_sync_objects(&device, &mut data)?;
+        sync::create_sync_objects(&device, &mut data)?;
 
         let frame = 0;
         let resized = false;
@@ -1030,27 +1031,6 @@ unsafe fn create_render_pass(
         .dependencies(dependencies);
 
     data.render_pass = device.create_render_pass(&info, None)?;
-
-    Ok(())
-}
-
-unsafe fn create_sync_objects(device: &Device, data: &mut AppData) -> Result<()> {
-    let semaphore_info = vk::SemaphoreCreateInfo::builder();
-    let fence_info = vk::FenceCreateInfo::builder()
-        .flags(vk::FenceCreateFlags::SIGNALED);
-
-    for _ in 0..MAX_FRAMES_IN_FLIGHT {
-        data.image_available_semaphores
-            .push(device.create_semaphore(&semaphore_info, None)?);
-        data.render_finished_semaphores
-            .push(device.create_semaphore(&semaphore_info, None)?);
-        data.in_flight_fences.push(device.create_fence(&fence_info, None)?);
-    }
-
-    data.images_in_flight = data.swapchain_images
-        .iter()
-        .map(|_| vk::Fence::null())
-        .collect();
 
     Ok(())
 }
