@@ -1,6 +1,6 @@
 mod engine;
 
 fn main() {
-    engine::init::run();
+    pollster::block_on(engine::init::run());
 }
 
